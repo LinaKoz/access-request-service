@@ -1,0 +1,54 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum RequestStatus {
+  PENDING
+  APPROVED
+  DENIED
+}
+
+/// Represents an employee's request for access to an internal application.
+/// Status follows a simple state machine: PENDING -> APPROVED | DENIED (terminal).
+model AccessRequest {
+  id           String        @id @default(uuid())
+  employeeId   String
+  employeeName String
+  application  String
+  reason       String
+  status       RequestStatus @default(PENDING)
+
+  // Audit
+  createdBy    String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  decisionBy   String?
+  decisionAt   DateTime?
+  decisionNote String?
+
+  // Idempotency — client-provided key, unique per employee (not globally).
+  idempotencyKey     String
+
+  // SHA-256 of the request payload. Detects when the same idempotency key
+  // is reused with a different body -> 409.
+  payloadFingerprint String
+
+  // A given employee cannot reuse the same idempotency key.
+  @@unique([employeeId, idempotencyKey], name: "uq_employee_idempotency_key")
+
+  // Composite index for the duplicate-pending check query:
+  // "find a PENDING request for this employee + application".
+  // NOT a unique constraint — an employee may have multiple rows for the
+  // same app over time (one APPROVED, then a new PENDING, etc.).
+  // The one-pending-per-app rule is enforced in the service layer because
+  // SQLite does not support partial unique indexes (WHERE status = 'PENDING').
+  @@index([employeeId, application, status], name: "idx_employee_app_status")
+
+  @@index([employeeId], name: "idx_employee")
+  @@index([status], name: "idx_status")
+}
