@@ -9,8 +9,10 @@ An internal service for managing application access requests. Employees submit r
 - Idempotent request creation
 - Cursor-based pagination
 - Structured logging
-- AI-powered operational queries
+- AI-powered operational queries with LLM resilience (retry + circuit breaker)
+- Rate limiting on the agent endpoint
 - GraphQL API alongside REST
+- OpenAPI / Swagger UI at `/api-docs`
 
 ## Architecture
 
@@ -56,7 +58,7 @@ An internal service for managing application access requests. Employees submit r
 ## Tech Stack
 
 - **Runtime:** Node.js 18+ / TypeScript
-- **Framework:** Express
+- **Framework:** Express 5
 - **GraphQL:** graphql-yoga
 - **ORM:** Prisma
 - **Database:** SQLite
@@ -64,6 +66,8 @@ An internal service for managing application access requests. Employees submit r
 - **Logging:** Pino (structured JSON)
 - **Testing:** Vitest + Supertest
 - **Auth:** Mocked JWT
+- **Rate Limiting:** express-rate-limit
+- **API Docs:** swagger-ui-express (OpenAPI 3.0)
 
 ## Getting Started
 
@@ -76,6 +80,7 @@ An internal service for managing application access requests. Employees submit r
 
 ```bash
 # Clone and install
+git clone https://github.com/LinaKoz/access-request-service.git
 cd access-request-service
 npm install
 
@@ -336,7 +341,7 @@ curl -X POST http://localhost:3000/api/agent/query \
 - Lookup a single request by ID
 - Summarize request activity for the last 7 days
 
-**Response (200):**
+**Response (200) — normal:**
 ```json
 {
   "data": {
@@ -351,11 +356,32 @@ curl -X POST http://localhost:3000/api/agent/query \
 }
 ```
 
+**Response (200) — degraded (OpenAI unavailable):**
+```json
+{
+  "data": {
+    "answer": "Here is a summary...",
+    "provider": "mock",
+    "degraded": true,
+    "degradedReason": "circuit_open",
+    "evaluation": {
+      "queryUnderstood": true,
+      "hadRelevantData": true,
+      "score": 100
+    }
+  }
+}
+```
+
 ### Health Check
 
 ```bash
 curl http://localhost:3000/health
 ```
+
+### Swagger UI
+
+Interactive API documentation is available at `http://localhost:3000/api-docs` when the server is running.
 
 ### GraphQL API
 
