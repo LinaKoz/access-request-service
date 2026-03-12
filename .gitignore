@@ -3,5 +3,9 @@ dist/
 *.db
 *.db-journal
 .env
+.env.*
+!.env.example
 coverage/
 .prisma-engines/
+*.tsbuildinfo
+*.log
