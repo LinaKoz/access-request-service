@@ -472,9 +472,11 @@ All errors flow through a centralized `errorHandler` middleware. Custom `AppErro
 The LLM client uses two generic utilities from `src/utils/` to handle OpenAI instability:
 
 **Retry (`src/utils/retry.ts`)**
-- Retries transient failures (429, 5xx, network errors) up to 2 times with exponential backoff (300 ms, 600 ms).
+- Retries transient failures (429, 5xx, network errors) up to 2 times with exponential backoff (300 ms, 600 ms) and jitter (50–100% of delay) to avoid thundering-herd retries.
+- Honours `Retry-After` headers returned by the upstream API — when present, the server-suggested delay is used instead of fixed backoff, capped at 60 seconds to prevent excessive waits.
 - Non-retryable errors (400, 401, 403) fail immediately — retrying would not help.
-- Generic: not coupled to OpenAI. Any future external API client can use `withRetry` with its own `isRetryable` logic.
+- Errors are classified via a typed `UpstreamError` class (carrying `statusCode` and optional `retryAfterMs`) instead of regex-parsing error messages.
+- Generic: not coupled to OpenAI. Any future external API client can use `withRetry` with its own `isRetryable` and `getRetryDelay` logic.
 
 **Circuit Breaker (`src/utils/circuitBreaker.ts`)**
 
@@ -531,3 +533,16 @@ access-request-service/
 - Replace SQLite with PostgreSQL for stronger concurrency guarantees
 - Add a partial unique index for enforcing one PENDING request per user per application at the database level
 - Add request metrics via `prom-client`
+
+### LLM Resilience
+
+For a production-grade version, the following improvements would be valuable:
+
+- **Add proactive rate limiting**
+  Introduce an outbound rate limiter (for example, token bucket or sliding window) to reduce the chance of hitting `429 Too Many Requests` in the first place.
+
+- **Persist query and evaluation metadata**
+  Store queries, responses, retry outcomes, and evaluation scores for observability, debugging, and analytics.
+
+- **Tune retry strategy per error type**
+  Different transient errors may benefit from different retry windows, limits, and fallback behavior.

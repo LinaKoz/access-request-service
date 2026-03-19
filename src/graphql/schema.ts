@@ -88,7 +88,7 @@ export const yoga = createYoga({
     maskError(error, message) {
       // Duck-type: check extensions.code directly (avoids ESM/CJS instanceof mismatch)
       const code = (error as any)?.extensions?.code as string | undefined;
-      if (code && APP_ERROR_CODES.has(code)) return error;
+      if (code && APP_ERROR_CODES.has(code)) return error as Error;
 
       return createGraphQLError(message, {
         extensions: { code: 'INTERNAL_SERVER_ERROR' },

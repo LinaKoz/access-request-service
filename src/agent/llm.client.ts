@@ -18,6 +18,30 @@ export interface LlmResponse {
 }
 
 const OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions';
+const MAX_RETRY_DELAY_MS = 60_000;
+
+export class UpstreamError extends Error {
+  constructor(
+    public readonly statusCode: number,
+    message: string,
+    public readonly retryAfterMs?: number,
+  ) {
+    super(message);
+    this.name = 'UpstreamError';
+  }
+}
+
+function parseRetryAfter(header: string | null): number | undefined {
+  if (!header) return undefined;
+
+  const seconds = Number(header);
+  if (!Number.isNaN(seconds)) return seconds * 1000;
+
+  const date = Date.parse(header);
+  if (!Number.isNaN(date)) return Math.max(0, date - Date.now());
+
+  return undefined;
+}
 
 const llmCircuitBreaker = new CircuitBreaker('openai', {
   failureThreshold: 3,
@@ -26,15 +50,10 @@ const llmCircuitBreaker = new CircuitBreaker('openai', {
 
 function isRetryableError(err: unknown): boolean {
   if (err instanceof CircuitOpenError) return false;
-  if (err instanceof Error) {
-    const match = err.message.match(/OpenAI API error (\d+)/);
-    if (match) {
-      const status = parseInt(match[1], 10);
-      return status === 429 || status >= 500;
-    }
-    return true;
+  if (err instanceof UpstreamError) {
+    return err.statusCode === 429 || err.statusCode >= 500;
   }
-  return false;
+  return err instanceof Error;
 }
 
 /**
@@ -48,7 +67,13 @@ export async function queryLlm(request: LlmRequest): Promise<LlmResponse> {
     try {
       return await withRetry(
         () => llmCircuitBreaker.execute(() => callOpenAI(request)),
-        { maxAttempts: 2, baseDelayMs: 300, isRetryable: isRetryableError },
+        {
+          maxAttempts: 2,
+          baseDelayMs: 300,
+          maxDelayMs: MAX_RETRY_DELAY_MS,
+          isRetryable: isRetryableError,
+          getRetryDelay: (err) => err instanceof UpstreamError ? err.retryAfterMs : undefined,
+        },
       );
     } catch (err) {
       if (err instanceof CircuitOpenError) {
@@ -95,7 +120,8 @@ async function callOpenAI(request: LlmRequest): Promise<LlmResponse> {
 
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`OpenAI API error ${res.status}: ${text}`);
+    const retryAfterMs = parseRetryAfter(res.headers.get('Retry-After'));
+    throw new UpstreamError(res.status, `OpenAI API error ${res.status}: ${text}`, retryAfterMs);
   }
 
   const data = (await res.json()) as {
