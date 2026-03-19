@@ -276,7 +276,17 @@ describe('PATCH /api/requests/:id/decision', () => {
     expect(res.body.data.decisionAt).toBeDefined();
   });
 
-  it('returns 409 when trying to decide again', async () => {
+  it('returns 200 when sending the same decision again (idempotent)', async () => {
+    const res = await request(app)
+      .patch(`/api/requests/${requestId}/decision`)
+      .set('Authorization', `Bearer ${tokens.approver}`)
+      .send({ decision: 'APPROVED' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.status).toBe('APPROVED');
+  });
+
+  it('returns 409 when trying to decide with a different decision', async () => {
     const res = await request(app)
       .patch(`/api/requests/${requestId}/decision`)
       .set('Authorization', `Bearer ${tokens.approver}`)

@@ -167,13 +167,17 @@ export async function decideRequest(id: string, input: DecisionInput, user: Auth
     throw AppError.notFound(`Request "${id}" not found`);
   }
 
+  const newStatus = input.decision as RequestStatus;
+
+  if (request.status === newStatus) {
+    return request;
+  }
+
   if (request.status !== RequestStatus.PENDING) {
     throw AppError.conflict(
       `Request is already ${request.status.toLowerCase()} and cannot be modified`,
     );
   }
-
-  const newStatus = input.decision as RequestStatus;
   const updated = await repo.updateDecision(id, newStatus, user.userId, input.note);
 
   logger.info(
