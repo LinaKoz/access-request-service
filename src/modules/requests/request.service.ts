@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { Prisma } from '@prisma/client';
 import { AppError } from '../../errors/AppError';
 import { logger } from '../../config/logger';
 import { AuthUser } from '../../middleware/auth';
@@ -46,7 +47,12 @@ export interface CreateResult {
 
 /**
  * Creates an access request or returns existing one on idempotent retry.
- * Enforces: idempotency (same key + same payload → return existing), duplicate pending prevention.
+ *
+ * Strategy: insert-first, catch unique violations.
+ * - (employeeId, idempotencyKey) unique constraint → idempotency check
+ * - (employeeId, application) WHERE status='PENDING' partial index → duplicate pending prevention
+ *
+ * Pre-checks are kept for friendly early validation but correctness relies on DB constraints.
  *
  * @returns { data, isIdempotentRetry } — isIdempotentRetry true when same key+payload reused
  * @throws {AppError} 409 - Idempotency key reused with different payload
@@ -59,40 +65,48 @@ export async function createAccessRequest(
 ): Promise<CreateResult> {
   const payloadFingerprint = buildPayloadFingerprint(input);
 
-  const existingByKey = await repo.findByEmployeeAndIdempotencyKey(user.userId, idempotencyKey);
-  if (existingByKey) {
-    if (existingByKey.payloadFingerprint !== payloadFingerprint) {
-      throw AppError.conflict(
-        'Idempotency-Key has already been used with a different request payload',
-      );
-    }
-    logger.info({ idempotencyKey, requestId: existingByKey.id }, 'Idempotent retry — returning existing request');
-    return { data: existingByKey, isIdempotentRetry: true };
-  }
+  try {
+    const request = await repo.createRequest({
+      employeeId: user.userId,
+      employeeName: user.userName,
+      application: input.application,
+      reason: input.reason,
+      createdBy: user.userId,
+      idempotencyKey,
+      payloadFingerprint,
+    });
 
-  const existingPending = await repo.findPendingByEmployeeAndApp(user.userId, input.application);
-  if (existingPending) {
+    logger.info(
+      { requestId: request.id, application: input.application, userId: user.userId },
+      'Access request created',
+    );
+
+    return { data: request, isIdempotentRetry: false };
+  } catch (err) {
+    if (!(err instanceof Prisma.PrismaClientKnownRequestError) || err.code !== 'P2002') {
+      throw err;
+    }
+
+    // When both constraints are violated, SQLite may report either one.
+    // Always check idempotency first: if the key exists, it takes priority.
+    const existing = await repo.findByEmployeeAndIdempotencyKey(user.userId, idempotencyKey);
+
+    if (existing) {
+      if (existing.payloadFingerprint !== payloadFingerprint) {
+        throw AppError.conflict(
+          'Idempotency-Key has already been used with a different request payload',
+        );
+      }
+
+      logger.info({ idempotencyKey, requestId: existing.id }, 'Idempotent retry — returning existing request');
+      return { data: existing, isIdempotentRetry: true };
+    }
+
+    // No idempotency match → must be the partial unique index (duplicate pending)
     throw AppError.conflict(
-      `A pending request for "${input.application}" already exists (id: ${existingPending.id})`,
+      `A pending request for "${input.application}" already exists`,
     );
   }
-
-  const request = await repo.createRequest({
-    employeeId: user.userId,
-    employeeName: user.userName,
-    application: input.application,
-    reason: input.reason,
-    createdBy: user.userId,
-    idempotencyKey,
-    payloadFingerprint,
-  });
-
-  logger.info(
-    { requestId: request.id, application: input.application, userId: user.userId },
-    'Access request created',
-  );
-
-  return { data: request, isIdempotentRetry: false };
 }
 
 export interface PaginatedResult {

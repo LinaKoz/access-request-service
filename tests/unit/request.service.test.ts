@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { Prisma } from '@prisma/client';
 
 vi.mock('../../src/modules/requests/request.repository');
 vi.mock('../../src/config/logger', () => ({
@@ -9,6 +10,13 @@ import * as service from '../../src/modules/requests/request.service';
 import { encodeCursor, decodeCursor } from '../../src/modules/requests/request.service';
 import * as repo from '../../src/modules/requests/request.repository';
 import { AuthUser } from '../../src/middleware/auth';
+
+function makeP2002(target: string[]) {
+  return new Prisma.PrismaClientKnownRequestError(
+    'Unique constraint failed',
+    { code: 'P2002', clientVersion: '6.19.2', meta: { target } },
+  );
+}
 
 const mockedRepo = vi.mocked(repo);
 
@@ -40,8 +48,6 @@ describe('RequestService', () => {
 
   describe('createAccessRequest', () => {
     it('creates a request and returns isIdempotentRetry=false', async () => {
-      mockedRepo.findByEmployeeAndIdempotencyKey.mockResolvedValue(null);
-      mockedRepo.findPendingByEmployeeAndApp.mockResolvedValue(null);
       mockedRepo.createRequest.mockResolvedValue(baseRequest);
 
       const result = await service.createAccessRequest(
@@ -69,6 +75,7 @@ describe('RequestService', () => {
         .update(JSON.stringify({ application: 'Jira', reason: 'Need access' }))
         .digest('hex');
 
+      mockedRepo.createRequest.mockRejectedValue(makeP2002(['employeeId', 'idempotencyKey']));
       mockedRepo.findByEmployeeAndIdempotencyKey.mockResolvedValue({
         ...baseRequest,
         payloadFingerprint: expectedFP,
@@ -82,10 +89,10 @@ describe('RequestService', () => {
 
       expect(result.isIdempotentRetry).toBe(true);
       expect(result.data.id).toBe('req-1');
-      expect(mockedRepo.createRequest).not.toHaveBeenCalled();
     });
 
     it('throws 409 when idempotency key reused with different payload', async () => {
+      mockedRepo.createRequest.mockRejectedValue(makeP2002(['employeeId', 'idempotencyKey']));
       mockedRepo.findByEmployeeAndIdempotencyKey.mockResolvedValue({
         ...baseRequest,
         payloadFingerprint: 'completely-different-fingerprint',
@@ -101,8 +108,8 @@ describe('RequestService', () => {
     });
 
     it('throws conflict when a pending duplicate exists for same app', async () => {
+      mockedRepo.createRequest.mockRejectedValue(makeP2002(['employeeId', 'application']));
       mockedRepo.findByEmployeeAndIdempotencyKey.mockResolvedValue(null);
-      mockedRepo.findPendingByEmployeeAndApp.mockResolvedValue(baseRequest);
 
       await expect(
         service.createAccessRequest(

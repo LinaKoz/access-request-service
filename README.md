@@ -436,8 +436,25 @@ Each domain concept (auth, requests, agent) lives in its own folder with co-loca
 ### 2. Idempotency
 POST `/api/requests` requires an `Idempotency-Key` header. Repeat calls with the same key return the previously created request instead of creating a new one. If the same key is reused with a different payload, the server returns `409 Conflict`. This prevents accidental duplicate submissions from retries or network issues.
 
-### 3. Duplicate Prevention
-The service layer checks for existing PENDING requests before creating a new one. A user cannot have two pending requests for the same application.
+### 3. Duplicate Prevention & Idempotency — DB-Level Enforcement
+
+Two guarantees are enforced at the database level:
+
+**Idempotency** — `(employeeId, idempotencyKey)` unique constraint prevents duplicate execution of the same request.
+
+**One PENDING per application** — enforced via a partial unique index on `(employeeId, application) WHERE status = 'PENDING'`. This allows multiple historical records (APPROVED, DENIED) for the same application, but only one PENDING at any time.
+
+Since Prisma (v6.19.2) does not support partial unique indexes in `schema.prisma`, this constraint is applied via a raw SQL migration:
+
+```sql
+CREATE UNIQUE INDEX uq_employee_app_pending
+ON AccessRequest (employeeId, application)
+WHERE status = 'PENDING';
+```
+
+> Always use `prisma migrate dev`. Do **not** use `prisma db push` — it will drop this index.
+
+**Insert-first flow:** The service attempts the insert directly and handles `P2002` (unique constraint violation) rather than doing a check-then-insert, which would be vulnerable to race conditions. When a violation occurs, idempotency is always checked first — regardless of which constraint SQLite reports — because SQLite may report either constraint when both are violated simultaneously. This ensures deterministic, correct prioritization of idempotent retries over business conflicts.
 
 ### 4. Terminal State Machine
 Request status follows `PENDING → APPROVED | DENIED`. Once a decision is made, the request cannot be changed. This is enforced at the service layer.
@@ -531,7 +548,6 @@ access-request-service/
 ## Future Improvements
 
 - Replace SQLite with PostgreSQL for stronger concurrency guarantees
-- Add a partial unique index for enforcing one PENDING request per user per application at the database level
 - Add request metrics via `prom-client`
 
 ### LLM Resilience

@@ -7,6 +7,7 @@ import { v4 as uuid } from 'uuid';
 
 beforeAll(async () => {
   await prisma.$connect();
+  await prisma.accessRequest.deleteMany();
 });
 
 afterAll(async () => {

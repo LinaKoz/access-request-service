@@ -25,14 +25,14 @@ model AccessRequest {
 
   // Audit
   createdBy    String
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
   decisionBy   String?
   decisionAt   DateTime?
   decisionNote String?
 
   // Idempotency — client-provided key, unique per employee (not globally).
-  idempotencyKey     String
+  idempotencyKey String
 
   // SHA-256 of the request payload. Detects when the same idempotency key
   // is reused with a different body -> 409.
@@ -40,15 +40,11 @@ model AccessRequest {
 
   // A given employee cannot reuse the same idempotency key.
   @@unique([employeeId, idempotencyKey], name: "uq_employee_idempotency_key")
-
-  // Composite index for the duplicate-pending check query:
-  // "find a PENDING request for this employee + application".
-  // NOT a unique constraint — an employee may have multiple rows for the
-  // same app over time (one APPROVED, then a new PENDING, etc.).
-  // The one-pending-per-app rule is enforced in the service layer because
-  // SQLite does not support partial unique indexes (WHERE status = 'PENDING').
+  // Composite index for the duplicate-pending check query.
+  // The one-pending-per-app rule is enforced at DB level via a partial unique
+  // index (see migration add_pending_unique_index). Prisma cannot model partial
+  // indexes in schema, so the raw SQL index is managed via migration.
   @@index([employeeId, application, status], name: "idx_employee_app_status")
-
   @@index([employeeId], name: "idx_employee")
   @@index([status], name: "idx_status")
 }
